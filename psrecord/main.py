@@ -127,9 +127,12 @@ def main():
         default="rss",
         help=(
             "Memory metric to record. rss is the default and matches the original "
-            "psrecord behavior. pss and uss use psutil.memory_full_info() and are "
-            "mainly available on Linux. pss is usually more accurate than rss for "
-            "multi-process programs with shared memory."
+            "psrecord behavior. rss counts each process' resident memory, so shared "
+            "memory is counted once per process. pss and uss use "
+            "psutil.memory_full_info() and are mainly available on Linux. pss "
+            "divides shared pages proportionally and is usually more accurate than "
+            "rss for multi-process programs with shared memory. uss counts only "
+            "fully private memory and is the most conservative metric."
         ),
     )
 
