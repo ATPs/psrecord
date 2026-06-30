@@ -96,6 +96,19 @@ To include sub-processes in the CPU and memory stats, use:
 
     psrecord 1330 --log activity.txt --include-children
 
+You can choose which memory metric is recorded and plotted with
+``--memory-metric``. The default, ``rss``, matches the original psrecord
+behavior. ``pss`` and ``uss`` use ``psutil.memory_full_info()`` and are
+mainly available on Linux. For example::
+
+    psrecord "python script.py" --include-children --interval 1 --memory-metric pss --log usage.txt --plot usage.png
+
+RSS is the resident memory each process sees, so shared memory can be
+over-counted when summing multiple processes. PSS distributes shared pages
+proportionally and is often a better estimate for multi-process workloads on
+Linux. USS counts fully private memory, which is more conservative and is
+usually lower than the total memory used by a job.
+
 Running tests
 =============
 

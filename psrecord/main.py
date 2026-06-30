@@ -35,8 +35,29 @@ def get_percent(process):
     return process.cpu_percent()
 
 
-def get_memory(process):
-    return process.memory_info()
+class MemoryMetricUnavailable(ValueError):
+    pass
+
+
+def get_memory(process, metric="rss"):
+    if metric == "rss":
+        return process.memory_info().rss
+
+    try:
+        memory = process.memory_full_info()
+    except AttributeError:
+        raise MemoryMetricUnavailable(
+            f"The selected memory metric '{metric}' is not available on this system. "
+            "Try --memory-metric rss."
+        )
+
+    try:
+        return getattr(memory, metric)
+    except AttributeError:
+        raise MemoryMetricUnavailable(
+            f"The selected memory metric '{metric}' is not available on this system. "
+            "Try --memory-metric rss."
+        )
 
 
 def all_children(pr):
@@ -100,6 +121,18 @@ def main():
 
     parser.add_argument("--include-io", help="include include_io I/O stats", action="store_true")
 
+    parser.add_argument(
+        "--memory-metric",
+        choices=("rss", "pss", "uss"),
+        default="rss",
+        help=(
+            "Memory metric to record. rss is the default and matches the original "
+            "psrecord behavior. pss and uss use psutil.memory_full_info() and are "
+            "mainly available on Linux. pss is usually more accurate than rss for "
+            "multi-process programs with shared memory."
+        ),
+    )
+
     args = parser.parse_args()
 
     # Attach to process
@@ -124,6 +157,7 @@ def main():
         include_children=args.include_children,
         include_io=args.include_io,
         log_format=args.log_format,
+        memory_metric=args.memory_metric,
     )
 
     if sprocess is not None:
@@ -139,6 +173,7 @@ def monitor(
     include_children=False,
     include_io=False,
     log_format="plain",
+    memory_metric="rss",
 ):
     # We import psutil here so that the module can be imported even if psutil
     # is not present (for example if accessing the version)
@@ -156,13 +191,16 @@ def monitor(
     elif logfile is not None:
         f = open(logfile, "w")
 
+    memory_label = "Real (MB)" if memory_metric == "rss" else f"Memory {memory_metric.upper()} (MB)"
+    memory_csv_label = "mem_real" if memory_metric == "rss" else f"mem_{memory_metric}"
+
     if logfile:
         if log_format == "plain":
             f.write(
                 "# {:12s} {:12s} {:12s} {:12s}".format(
                     "Elapsed time".center(12),
                     "CPU (%)".center(12),
-                    "Real (MB)".center(12),
+                    memory_label.center(12),
                     "Virtual (MB)".center(12),
                 ),
             )
@@ -176,7 +214,7 @@ def monitor(
                     )
                 )
         elif log_format == "csv":
-            f.write("elapsed_time,nproc,cpu,mem_real,mem_virtual")
+            f.write(f"elapsed_time,nproc,cpu,{memory_csv_label},mem_virtual")
             if include_io:
                 f.write(",read_count,write_count,read_bytes,write_bytes")
         else:
@@ -223,11 +261,12 @@ def monitor(
             # Get current CPU and memory
             try:
                 current_cpu = get_percent(pr)
-                current_mem = get_memory(pr)
+                current_mem_real = get_memory(pr, memory_metric) / 1024.0**2
+                current_mem_virtual = pr.memory_info().vms / 1024.0**2
+            except MemoryMetricUnavailable:
+                raise
             except Exception:
                 break
-            current_mem_real = current_mem.rss / 1024.0**2
-            current_mem_virtual = current_mem.vms / 1024.0**2
 
             if include_io:
                 counters = pr.io_counters()
@@ -243,9 +282,8 @@ def monitor(
                 for child in all_children(pr):
                     try:
                         current_cpu += get_percent(child)
-                        current_mem = get_memory(child)
-                        current_mem_real += current_mem.rss / 1024.0**2
-                        current_mem_virtual += current_mem.vms / 1024.0**2
+                        current_mem_real += get_memory(child, memory_metric) / 1024.0**2
+                        current_mem_virtual += child.memory_info().vms / 1024.0**2
                         if include_io:
                             counters = child.io_counters()
                             read_count += counters.read_count
@@ -253,6 +291,8 @@ def monitor(
                             read_bytes += counters.read_bytes
                             write_bytes += counters.write_bytes
                         n_proc += 1
+                    except MemoryMetricUnavailable:
+                        raise
                     except Exception:
                         continue
 
@@ -319,7 +359,7 @@ def monitor(
             ax2.plot(log["times"], log["mem_real"], "-", lw=1, color="b")
             ax2.set_ylim(0.0, max(log["mem_real"]) * 1.2)
 
-            ax2.set_ylabel("Real Memory (MB)", color="b")
+            ax2.set_ylabel(f"{memory_metric.upper()} Memory (MB)", color="b")
 
             ax.grid()
 
